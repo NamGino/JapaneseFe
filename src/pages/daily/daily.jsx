@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { Box, Container, Typography, Paper, Grid, Checkbox, Button, TextField, IconButton } from '@mui/material';
-import CloudQueueIcon from '@mui/icons-material/CloudQueue';
-import NightlightIcon from '@mui/icons-material/Nightlight';
 import SaveRoundedIcon from '@mui/icons-material/SaveRounded';
 import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import CancelRoundedIcon from '@mui/icons-material/CancelRounded';
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import CloudQueueIcon from '@mui/icons-material/CloudQueue';
+import NightlightIcon from '@mui/icons-material/Nightlight';
+import WbSunnyRoundedIcon from '@mui/icons-material/WbSunnyRounded';
 import NavbarLogin from '../../components/navbar/navbarLogin.jsx';
 import { useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
@@ -39,11 +40,11 @@ const contentFontStyle = {
   fontStyle: 'normal',
   fontWeight: 400,
 };
-	const location = useLocation();
-	const params = new URLSearchParams(location.search);
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
   const currentUser = useSelector((state) => state.user?.user);
 
-	const date = params.get("date") || new Date().toISOString().slice(0, 10);
+  const date = params.get("date") || new Date().toISOString().slice(0, 10);
   const [diaryData, setDiaryData] = useState({
     entry: null,
     tasks: [],
@@ -84,7 +85,6 @@ const contentFontStyle = {
       }));
       setVocabularyEntries(mappedVocabularies);
 
-      // Sync checkedItems theo taskTemplates (UI đang dùng key = templateId)
       const nextCheckedItems = {};
       if (res?.taskTemplates && res.taskTemplates.length > 0) {
         res.taskTemplates.forEach((tpl, index) => {
@@ -548,14 +548,167 @@ const contentFontStyle = {
     return `Ngày ${parsedDate.getDate()}`;
   }, [date, totalStudyDays]);
 
-  // const handleTest = async () => {
-  //   try {      const res = await test();
-  //     console.log('Test API response:', res);
-  //   } catch (error) {
-  //     console.error('Test API error:', error);
-  //   }
-  // }
+  // Weather: fetch realtime by device geolocation only
+const [weatherState, setWeatherState] = useState({
+  temperature: null,
+  text: null,
+  code: null,
+  isDay: true
+});
 
+const [weatherCoords, setWeatherCoords] = useState(null);
+const [geolocationDenied, setGeolocationDenied] = useState(false);
+
+const weatherRequestIdRef = useRef(0);
+
+// Weather icon
+const renderWeatherIcon = (code, isDay) => {
+  const normalizedCode = Number(code);
+  const day = Boolean(isDay);
+
+  // trời quang
+  if (normalizedCode === 0) {
+    return day
+      ? <WbSunnyRoundedIcon sx={{ fontSize: 16, color: '#ffb300' }} />
+      : <NightlightIcon sx={{ fontSize: 16, color: '#90a4ae' }} />;
+  }
+
+  // ít mây
+  if ([1, 2].includes(normalizedCode)) {
+    return day
+      ? <WbSunnyRoundedIcon sx={{ fontSize: 16, color: '#ffca28' }} />
+      : <NightlightIcon sx={{ fontSize: 16, color: '#90a4ae' }} />;
+  }
+
+  // nhiều mây
+  if (normalizedCode === 3) {
+    return <CloudQueueIcon sx={{ fontSize: 16, color: '#90a4ae' }} />;
+  }
+
+  // mưa
+  if (normalizedCode === 61) {
+    return <CloudQueueIcon sx={{ fontSize: 16, color: '#29b6f6' }} />;
+  }
+
+  return <CloudQueueIcon sx={{ fontSize: 16, color: '#90a4ae' }} />;
+};
+
+useEffect(() => {
+  let cancelled = false;
+
+  const loadWeather = async (lat, lon) => {
+    const requestId = ++weatherRequestIdRef.current;
+
+    try {
+      const params = new URLSearchParams({
+        latitude: String(lat),
+        longitude: String(lon),
+        timezone: 'auto',
+        current: 'temperature_2m,is_day,cloud_cover,precipitation,rain',
+      });
+
+      const response = await fetch(
+        `https://api.open-meteo.com/v1/forecast?${params.toString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Weather fetch failed');
+      }
+
+      const data = await response.json();
+
+      if (cancelled) return;
+      if (requestId !== weatherRequestIdRef.current) return;
+
+      console.log('FULL WEATHER:', data);
+
+      const current = data?.current || {};
+
+      const temp = current.temperature_2m ?? '--';
+      const isDay = Number(current.is_day) === 1;
+
+      const cloud = Number(current.cloud_cover ?? 0);
+      const rain = Number(current.rain ?? 0);
+      const precipitation = Number(current.precipitation ?? 0);
+
+      let text = 'Trời quang';
+      let code = 0;
+
+      // Có mưa
+      if (rain > 0 || precipitation > 0) {
+        text = 'Có mưa';
+        code = 61;
+      }
+      // Nhiều mây
+      else if (cloud >= 60) {
+        text = 'Nhiều mây';
+        code = 3;
+      }
+      // Ít mây
+      else if (cloud >= 20) {
+        text = 'Ít mây';
+        code = 2;
+      }
+
+      setWeatherState({
+        temperature: Math.round(temp),
+        text,
+        code,
+        isDay
+      });
+
+    } catch (error) {
+      console.error('Weather Error:', error);
+
+      if (cancelled) return;
+
+      setWeatherState({
+        temperature: '--',
+        text: 'Không lấy được thời tiết',
+        code: null,
+        isDay: true
+      });
+    }
+  };
+
+  const getLocation = () => {
+    if (!navigator.geolocation) {
+      setGeolocationDenied(true);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+
+        setGeolocationDenied(false);
+
+        setWeatherCoords({
+          lat,
+          lon
+        });
+
+        loadWeather(lat, lon);
+      },
+      (error) => {
+        console.error(error);
+        setGeolocationDenied(true);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  };
+
+  getLocation();
+
+  return () => {
+    cancelled = true;
+  };
+}, [date]);
 
   return (
     <>
@@ -596,235 +749,74 @@ const contentFontStyle = {
           }}>
             {dayLabel}
           </Box>
-          <Paper
-            elevation={0}
-            sx={{
-              borderRadius: '40px',
-              bgcolor: '#fff9f0',
-              border: '10px solid white',
-              p: 4,
-              position: 'relative',
-              ...contentFontStyle,
-            }}
-          >
+          <Paper elevation={0} sx={{ borderRadius: '40px', bgcolor: '#fff9f0', border: '10px solid white', p: 4, position: 'relative', ...contentFontStyle }}>
             <Box sx={{ textAlign: 'center', mb: 4 }}>
-              <Typography variant="h5" sx={{ fontWeight: 800, color: '#1a1a1a', mb: 2 }}>
-                Hôm nay bạn đã "tắm"?
-              </Typography>
-
+              <Typography variant="h5" sx={{ fontWeight: 800, color: '#1a1a1a', mb: 2 }}>Hôm nay bạn đã "tắm"?</Typography>
               <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, mb: 4 }}>
                 <Typography sx={{ fontSize: '0.9rem', fontWeight: 'bold', ...contentFontStyle }}>Tên của mình là:</Typography>
-                <Typography sx={{
-                  ...nameFontStyle,
-                  fontSize: '2.2rem',
-                  color: '#d81b60',
-                  borderBottom: '2px dotted #f48fb1',
-                  px: 6,
-                  lineHeight: 1
-                }}>
-                  {displayName}
-                </Typography>
+                <Typography sx={{ ...nameFontStyle, fontSize: '2.2rem', color: '#d81b60', borderBottom: '2px dotted #f48fb1', px: 6, lineHeight: 1 }}>{displayName}</Typography>
               </Box>
-
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'center' }}>
-                <Box sx={{ bgcolor: '#ffccbc', px: 2, py: 0.5, borderRadius: '8px', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                  Ngày: {formattedDate || date}
-                </Box>
-                <Box sx={{ bgcolor: '#ffccbc', px: 2, py: 0.5, borderRadius: '8px', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                  Thứ: {weekdayLabel || 'đang cập nhật'}
-                </Box>
+                <Box sx={{ bgcolor: '#ffccbc', px: 2, py: 0.5, borderRadius: '8px', fontSize: '0.75rem', fontWeight: 'bold' }}>Ngày: {formattedDate || date}</Box>
+                <Box sx={{ bgcolor: '#ffccbc', px: 2, py: 0.5, borderRadius: '8px', fontSize: '0.75rem', fontWeight: 'bold' }}>Thứ: {weekdayLabel || 'đang cập nhật'}</Box>
                 <Box sx={{ bgcolor: '#ffccbc', px: 2, py: 0.5, borderRadius: '8px', fontSize: '0.75rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
-                  Thời tiết: {diaryData?.entry?.weather?.temperature ?? '--'}°C - {diaryData?.entry?.weather?.text || 'Chưa cập nhật'}
-                  <CloudQueueIcon sx={{ fontSize: 16, color: '#03a9f4' }} /> <NightlightIcon sx={{ fontSize: 16, color: '#f06292' }} />
+                  {renderWeatherIcon(weatherState.code, weatherState.isDay)}
+                  <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                    <Typography sx={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{weatherState.temperature ?? '--'}°C - {weatherState.text}</Typography>
+                  </Box>
                 </Box>
+                {geolocationDenied && (
+                  <Box sx={{ width: '100%', textAlign: 'center', mt: 1 }}>
+                    <Typography sx={{ color: '#c62828', fontSize: '0.72rem' }}>Vui lòng bật chia sẻ vị trí (Location) cho trang này để cập nhật thời tiết chính xác.</Typography>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        setGeolocationDenied(false);
+                        setWeatherRetryKey((v) => v + 1);
+                      }}
+                    >
+                      Thử lại định vị
+                    </Button>
+                  </Box>
+                )}
               </Box>
             </Box>
 
             {isLoading && (
-              <Typography sx={{ fontSize: '0.82rem', color: '#5d4037', mb: 2, textAlign: 'center' }}>
-                Đang tải dữ liệu nhật ký...
-              </Typography>
+              <Typography sx={{ fontSize: '0.82rem', color: '#5d4037', mb: 2, textAlign: 'center' }}>Đang tải dữ liệu nhật ký...</Typography>
             )}
 
-            <Grid container spacing={3}
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between'
-              }}>
-              <Grid
-                item
-                xs={12}
-                md={12}
-                sx={{
-                  flexBasis: { md: '51%' },
-                  maxWidth: { md: '51%' },
-                  position: 'relative'
-                }}
-              >
-                <Box sx={sectionHeaderWrapStyle}>
-                  <Box sx={tabHeaderStyle}>Từ vựng + mẫu câu đã học được</Box>
-                </Box>
+            <Grid container spacing={3} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+              <Grid item xs={12} md={12} sx={{ flexBasis: { md: '51%' }, maxWidth: { md: '51%' }, position: 'relative' }}>
+                <Box sx={sectionHeaderWrapStyle}><Box sx={tabHeaderStyle}>Từ vựng + mẫu câu đã học được</Box></Box>
                 <Box sx={{ ...contentBoxStyle, minHeight: '450px' }}>
                   {vocabularyEntries.map((item, i) => {
                     const isSaved = item.saved && !item.editing;
 
                     return (
-                      <Box
-                        key={item.id}
-                        sx={{
-                          mb: 1.5,
-                          borderBottom: '1px dotted #e0e0e0',
-                          pb: isSaved ? 0.5 : 1.2,
-                          display: 'grid',
-                          gridTemplateColumns: '36px minmax(0, 1fr) auto',
-                          gap: 1,
-                          alignItems: 'center',
-                        }}
-                      >
-                        <Typography sx={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#333', textAlign: 'center' }}>
-                          {i + 1}.
-                        </Typography>
-
+                      <Box key={item.id} sx={{ mb: 1.5, borderBottom: '1px dotted #e0e0e0', pb: isSaved ? 0.5 : 1.2, display: 'grid', gridTemplateColumns: '36px minmax(0, 1fr) auto', gap: 1, alignItems: 'center' }}>
+                        <Typography sx={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#333', textAlign: 'center' }}>{i + 1}.</Typography>
                         <Box sx={{ display: 'grid', gap: isSaved ? '5px' : 0.8, minWidth: 0 }}>
-                          <TextField
-                            value={item.jp}
-                            onChange={(event) => handleVocabularyChange(item.id, 'jp', event.target.value)}
-                            disabled={isSaved}
-                            placeholder="Nhập từ vựng"
-                            size="small"
-                            fullWidth
-                            variant="outlined"
-                            multiline
-                            minRows={1}
-                            maxRows={4}
-                            sx={{
-                              '& .css-szkf5z-MuiInputBase-root-MuiOutlinedInput-root': {
-                                padding: isSaved ? '0 !important' : '5.5px 6px',
-                              },
-                              '& .MuiOutlinedInput-root': {
-                                padding: isSaved ? '0 !important' : '5.5px 6px',
-                                borderRadius: '5px',
-                                alignItems: 'flex-start',
-                                '& fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #ffd9b8',
-                                },
-                                '&:hover fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #f28e52',
-                                },
-                                '&.Mui-focused fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #f28e52',
-                                },
-                                '&.Mui-disabled': {
-                                  bgcolor: 'transparent',
-                                },
-                                '&.Mui-disabled fieldset': {
-                                  border: '0 !important',
-                                },
-                              },
-                              '& .MuiOutlinedInput-input': {
-                                padding: '0 !important',
-                                whiteSpace: 'normal',
-                                wordBreak: 'break-word',
-                                overflowWrap: 'anywhere',
-                                ...vocabularyFontStyle,
-                                fontWeight: 400,
-                                color: '#222',
-                              },
-                              '& .MuiOutlinedInput-input.Mui-disabled': {
-                                color: '#222 !important',
-                                WebkitTextFillColor: '#222 !important',
-                              },
-                            }}
-                          />
-
-                          <TextField
-                            value={item.vi}
-                            onChange={(event) => handleVocabularyChange(item.id, 'vi', event.target.value)}
-                            disabled={isSaved}
-                            placeholder={item.vi || item.suggestionVi || "Nhập nghĩa"}
-                            size="small"
-                            fullWidth
-                            variant="outlined"
-                            multiline
-                            minRows={1}
-                            maxRows={4}
-                            sx={{
-                                '& .css-szkf5z-MuiInputBase-root-MuiOutlinedInput-root': {
-                                  padding: isSaved ? '0 !important' : '5.5px 6px',
-                                },
-                              '& .MuiOutlinedInput-root': {
-                                  padding: isSaved ? '0 !important' : '5.5px 6px',
-                                borderRadius: '5px',
-                                alignItems: 'flex-start',
-                                '& fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #ffd9b8',
-                                },
-                                '&:hover fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #f28e52',
-                                },
-                                '&.Mui-focused fieldset': {
-                                  border: isSaved ? '0 !important' : '1px solid #f28e52',
-                                },
-                                '&.Mui-disabled': {
-                                  bgcolor: 'transparent',
-                                },
-                                '&.Mui-disabled fieldset': {
-                                  border: '0 !important',
-                                },
-                              },
-                              '& .MuiOutlinedInput-input': {
-                                padding: '0 !important',
-                                whiteSpace: 'normal',
-                                wordBreak: 'break-word',
-                                overflowWrap: 'anywhere',
-                                ...contentFontStyle,
-                                fontWeight: 400,
-                                color: isSaved ? '#d81b60' : '#333',
-                              },
-                              '& .MuiOutlinedInput-input.Mui-disabled': {
-                                color: `${isSaved ? '#d81b60' : '#333'} !important`,
-                                WebkitTextFillColor: `${isSaved ? '#d81b60' : '#333'} !important`,
-                              },
-                            }}
-                          />
+                          <TextField value={item.jp} onChange={(event) => handleVocabularyChange(item.id, 'jp', event.target.value)} disabled={isSaved} placeholder="Nhập từ vựng" size="small" fullWidth variant="outlined" multiline minRows={1} maxRows={4} sx={{ '& .css-szkf5z-MuiInputBase-root-MuiOutlinedInput-root': { padding: isSaved ? '0 !important' : '5.5px 6px' }, '& .MuiOutlinedInput-root': { padding: isSaved ? '0 !important' : '5.5px 6px', borderRadius: '5px', alignItems: 'flex-start', '& fieldset': { border: isSaved ? '0 !important' : '1px solid #ffd9b8' }, '&:hover fieldset': { border: isSaved ? '0 !important' : '1px solid #f28e52' }, '&.Mui-focused fieldset': { border: isSaved ? '0 !important' : '1px solid #f28e52' }, '&.Mui-disabled': { bgcolor: 'transparent' }, '&.Mui-disabled fieldset': { border: '0 !important' } }, '& .MuiOutlinedInput-input': { padding: '0 !important', whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere', ...vocabularyFontStyle, fontWeight: 400, color: '#222' }, '& .MuiOutlinedInput-input.Mui-disabled': { color: '#222 !important', WebkitTextFillColor: '#222 !important' } }} />
+                          <TextField value={item.vi} onChange={(event) => handleVocabularyChange(item.id, 'vi', event.target.value)} disabled={isSaved} placeholder={item.vi || item.suggestionVi || "Nhập nghĩa"} size="small" fullWidth variant="outlined" multiline minRows={1} maxRows={4} sx={{ '& .css-szkf5z-MuiInputBase-root-MuiOutlinedInput-root': { padding: isSaved ? '0 !important' : '5.5px 6px' }, '& .MuiOutlinedInput-root': { padding: isSaved ? '0 !important' : '5.5px 6px', borderRadius: '5px', alignItems: 'flex-start', '& fieldset': { border: isSaved ? '0 !important' : '1px solid #ffd9b8' }, '&:hover fieldset': { border: isSaved ? '0 !important' : '1px solid #f28e52' }, '&.Mui-focused fieldset': { border: isSaved ? '0 !important' : '1px solid #f28e52' }, '&.Mui-disabled': { bgcolor: 'transparent' }, '&.Mui-disabled fieldset': { border: '0 !important' } }, '& .MuiOutlinedInput-input': { padding: '0 !important', whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere', ...contentFontStyle, fontWeight: 400, color: isSaved ? '#d81b60' : '#333' }, '& .MuiOutlinedInput-input.Mui-disabled': { color: `${isSaved ? '#d81b60' : '#333'} !important`, WebkitTextFillColor: `${isSaved ? '#d81b60' : '#333'} !important` } }} />
                         </Box>
-
                         <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end', flexDirection: 'column' }}>
                           {!isSaved ? (
                             <>
-                              <IconButton
-                                size="small"
-                                onClick={() => handleSaveVocabulary(item.id)}
-                                disabled={isSubmitting}
-                                sx={{ color: '#4caf50', bgcolor: 'rgba(76, 175, 80, 0.1)' }}
-                              >
+                              <IconButton size="small" onClick={() => handleSaveVocabulary(item.id)} disabled={isSubmitting} sx={{ color: '#4caf50', bgcolor: 'rgba(76, 175, 80, 0.1)' }}>
                                 <SaveRoundedIcon fontSize="small" />
                               </IconButton>
-                              <IconButton
-                                size="small"
-                                onClick={() => handleCancelVocabulary(item.id)}
-                                disabled={isSubmitting}
-                                sx={{ color: '#607d8b', bgcolor: 'rgba(96, 125, 139, 0.1)' }}
-                              >
+                              <IconButton size="small" onClick={() => handleCancelVocabulary(item.id)} disabled={isSubmitting} sx={{ color: '#607d8b', bgcolor: 'rgba(96, 125, 139, 0.1)' }}>
                                 <CancelRoundedIcon fontSize="small" />
                               </IconButton>
                             </>
                           ) : (
                             <>
-                              <IconButton
-                                size="small"
-                                onClick={() => handleEditVocabulary(item.id)}
-                                disabled={isSubmitting}
-                                sx={{ color: '#f28e52', bgcolor: 'rgba(242, 142, 82, 0.1)' }}
-                              >
+                              <IconButton size="small" onClick={() => handleEditVocabulary(item.id)} disabled={isSubmitting} sx={{ color: '#f28e52', bgcolor: 'rgba(242, 142, 82, 0.1)' }}>
                                 <EditRoundedIcon fontSize="small" />
                               </IconButton>
-                              <IconButton
-                                size="small"
-                                onClick={() => handleDeleteVocabulary(item.id)}
-                                disabled={isSubmitting}
-                                sx={{ color: '#d81b60', bgcolor: 'rgba(216, 27, 96, 0.1)' }}
-                              >
+                              <IconButton size="small" onClick={() => handleDeleteVocabulary(item.id)} disabled={isSubmitting} sx={{ color: '#d81b60', bgcolor: 'rgba(216, 27, 96, 0.1)' }}>
                                 <DeleteOutlineRoundedIcon fontSize="small" />
                               </IconButton>
                             </>
@@ -834,77 +826,31 @@ const contentFontStyle = {
                     );
                   })}
 
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={handleAddVocabularyRow}
-                    disabled={isSubmitting}
-                    sx={{ bgcolor: '#4caf50', borderRadius: '20px', fontSize: '0.6rem', mt: 1 }}
-                  >
-                    + Thêm từ mới
-                  </Button>
+                  <Button variant="contained" size="small" onClick={handleAddVocabularyRow} disabled={isSubmitting} sx={{ bgcolor: '#4caf50', borderRadius: '20px', fontSize: '0.6rem', mt: 1 }}>+ Thêm từ mới</Button>
                 </Box>
               </Grid>
 
-              <Grid
-                item
-                xs={12}
-                md={12}
-                sx={{
-                  flexBasis: { md: '45%' },
-                  maxWidth: { md: '45%' }
-                }}
-              >
+              <Grid item xs={12} md={12} sx={{ flexBasis: { md: '45%' }, maxWidth: { md: '45%' } }}>
                 {/* Mood Section */}
                 <Box sx={{ mb: 3 }}>
-                  <Box sx={sectionHeaderWrapStyle}>
-                    <Box sx={tabHeaderStyle}>Tâm trạng</Box>
-                  </Box>
+                  <Box sx={sectionHeaderWrapStyle}><Box sx={tabHeaderStyle}>Tâm trạng</Box></Box>
                   <Box sx={{ ...contentBoxStyle, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1, textAlign: 'center' }}>
                     {['😊', '😆', '😍', '😇', '☹️', '😫', '😨', '😡', '🧐', '😴', '🤩', '🥳'].map((emoji, i) => (
-                      <Box
-                        key={i}
-                        onClick={() => handleMoodClick(emoji)}
-                        sx={{
-                          border: selectedMoodId === emoji ? '3px solid #f48fb1' : '2px solid transparent',
-                          bgcolor: selectedMoodId === emoji ? '#fce4ec' : 'transparent',
-                          borderRadius: '8px',
-                          fontSize: '1.4rem',
-                          cursor: 'pointer',
-                          p: 0.8,
-                          transition: 'all 0.2s ease',
-                          '&:hover': {
-                            transform: 'scale(1.15)',
-                            borderColor: '#f48fb1',
-                          }
-                        }}
-                      >
-                        {emoji}
-                      </Box>
+                      <Box key={i} onClick={() => handleMoodClick(emoji)} sx={{ border: selectedMoodId === emoji ? '3px solid #f48fb1' : '2px solid transparent', bgcolor: selectedMoodId === emoji ? '#fce4ec' : 'transparent', borderRadius: '8px', fontSize: '1.4rem', cursor: 'pointer', p: 0.8, transition: 'all 0.2s ease', '&:hover': { transform: 'scale(1.15)', borderColor: '#f48fb1' } }}>{emoji}</Box>
                     ))}
                   </Box>
                 </Box>
 
                 {taskGroups.map((group, idx) => (
                   <Box key={idx} sx={{ mb: 2 }}>
-                    <Box sx={sectionHeaderWrapStyle}>
-                      <Box sx={tabHeaderStyle}>{group.category}</Box>
-                    </Box>
+                    <Box sx={sectionHeaderWrapStyle}><Box sx={tabHeaderStyle}>{group.category}</Box></Box>
                     <Box sx={contentBoxStyle}>
                       {group.items.map((item, i) => {
                         const itemKey = item.id;
                         const isChecked = itemKey in checkedItems ? checkedItems[itemKey] : item.isDone;
                         return (
                           <Box key={i} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
-                            <Checkbox
-                              checked={isChecked}
-                              onChange={(e) => {
-                                const nextChecked = e.target.checked;
-                                handleTaskChecked(group.category, item, nextChecked);
-                              }}
-                              size="small"
-                              sx={{ color: '#f06292', p: 0.5 }}
-                            />
+                            <Checkbox checked={isChecked} onChange={(e) => { const nextChecked = e.target.checked; handleTaskChecked(group.category, item, nextChecked); }} size="small" sx={{ color: '#f06292', p: 0.5 }} />
                             <Typography sx={{ fontSize: '0.7rem', fontWeight: 'bold', color: '#444' }}>{item.title}</Typography>
                           </Box>
                         );
@@ -922,23 +868,15 @@ const contentFontStyle = {
 
             {/* Footer Sections */}
             <Box sx={{ mt: 4 }}>
-              <Box sx={sectionHeaderWrapStyle}>
-                <Box sx={tabHeaderStyle}>Điều thú vị / thấy biết ơn</Box>
-              </Box>
+              <Box sx={sectionHeaderWrapStyle}><Box sx={tabHeaderStyle}>Điều thú vị / thấy biết ơn</Box></Box>
               <Box sx={{ ...contentBoxStyle, borderStyle: 'dotted', borderWidth: '2px', borderColor: '#ffccbc' }}>
-                <Typography sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#1a237e', fontWeight: 500 }}>
-                  {diaryData?.entry?.gratitudeNote || 'Chưa có nội dung biết ơn cho ngày này.'}
-                </Typography>
+                <Typography sx={{ fontSize: '0.8rem', fontStyle: 'italic', color: '#1a237e', fontWeight: 500 }}>{diaryData?.entry?.gratitudeNote || 'Chưa có nội dung biết ơn cho ngày này.'}</Typography>
               </Box>
             </Box>
 
             <Box sx={{ mt: 4, pt: 2, borderTop: '2px dotted #f48fb1', textAlign: 'center' }}>
-              <Typography sx={{ color: '#d81b60', fontSize: '0.85rem', fontWeight: 'bold', mb: 1 }}>
-                ✿ Điều mình sẽ cố gắng ngày mai ✿
-              </Typography>
-              <Typography sx={{ color: '#0d47a1', fontSize: '0.8rem', fontWeight: 'bold' }}>
-                {diaryData?.entry?.tomorrowGoal || 'Chưa đặt mục tiêu cho ngày mai.'}
-              </Typography>
+              <Typography sx={{ color: '#d81b60', fontSize: '0.85rem', fontWeight: 'bold', mb: 1 }}>✿ Điều mình sẽ cố gắng ngày mai ✿</Typography>
+              <Typography sx={{ color: '#0d47a1', fontSize: '0.8rem', fontWeight: 'bold' }}>{diaryData?.entry?.tomorrowGoal || 'Chưa đặt mục tiêu cho ngày mai.'}</Typography>
             </Box>
           </Paper>
         </Container>
